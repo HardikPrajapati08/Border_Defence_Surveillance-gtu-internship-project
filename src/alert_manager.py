@@ -244,8 +244,8 @@ class AlertManager:
             notified        = False,
         )
 
-        # Log all non-normal alerts
-        if alert_level != "normal":
+        # Log all non-normal alerts OR any frame that has detections
+        if alert_level != "normal" or anomaly_result.get("detection_count", 0) > 0:
             self._log_alert(alert)
 
             # Send email for HIGH and CRITICAL (subject to cooldown)

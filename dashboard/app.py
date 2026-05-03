@@ -92,11 +92,11 @@ LOGO_PATH = _find_logo()
 # Design System — Navy/Gold military palette from the logo
 # ---------------------------------------------------------------------------
 
-NAVY_DARK   = "#060d1f"
-NAVY        = "#0b1730"
-NAVY_LIGHT  = "#112240"
-NAVY_PANEL  = "#0d1e3a"
-BORDER_CLR  = "#1e3d6b"
+NAVY_DARK   = "#040814"
+NAVY        = "#081022"
+NAVY_LIGHT  = "#0c1830"
+NAVY_PANEL  = "#09162a"
+BORDER_CLR  = "#152b4d"
 CYAN        = "#00d4ff"
 GOLD        = "#c9a84c"
 GOLD_LIGHT  = "#f0c060"
@@ -124,10 +124,17 @@ PRIORITY_EMOJI = {
 CLASS_COLORS_MAP = {
     "person":            "#2ec4b6",
     "vehicle":           "#f4a261",
+    "car":               "#f4a261",
+    "truck":             "#e76f51",
+    "bus":               "#e9c46a",
+    "motorcycle":        "#f4a261",
     "crowd":             "#e63946",
     "military_vehicle":  "#9b2335",
     "aircraft":          "#f0c060",
+    "airplane":          "#f0c060",
     "ship":              "#4895ef",
+    "boat":              "#4895ef",
+    "traffic light":     "#ffd166",
     "suspicious_object": "#c77dff",
 }
 
@@ -159,13 +166,13 @@ def inject_css():
     }}
 
     /* ── Base ───────────────────────────────────────────────────────── */
-    html, body, [class*="css"] {{
+    html, body, [class*="css"], .stApp {{
         font-family: 'DM Sans', sans-serif;
         background-color: {NAVY_DARK} !important;
         color: {TEXT_PRIMARY} !important;
     }}
 
-    .main {{ background-color: {NAVY_DARK} !important; }}
+    .main, .stApp {{ background-color: {NAVY_DARK} !important; }}
 
     .block-container {{
         padding-top: 2.5rem !important;
@@ -382,6 +389,38 @@ def inject_css():
         border-radius: 6px !important;
     }}
 
+    /* ── Sidebar controls ───────────────────────────────────────────── */
+    .stSlider > div > div {{ background: {BORDER_CLR} !important; }}
+    .stCheckbox > label {{ color: {TEXT_PRIMARY} !important; }}
+    
+    /* ── Input Fields ───────────────────────────────────────────────── */
+    div[data-testid="stTextInput"] input {{
+        background-color: {NAVY_DARK} !important;
+        color: {TEXT_PRIMARY} !important;
+        caret-color: {CYAN} !important;
+    }}
+    div[data-testid="stTextInput"] div[data-baseweb="input"] {{
+        background-color: {NAVY_DARK} !important;
+    }}
+    div[data-testid="stTextInput"] label {{
+        color: {TEXT_SECONDARY} !important;
+    }}
+
+    /* ── Buttons ────────────────────────────────────────────────────── */
+    .stButton > button, button[kind="primary"], button[kind="secondary"] {{
+        background-color: {NAVY_PANEL} !important;
+        color: {TEXT_PRIMARY} !important;
+        border: 1px solid {BORDER_CLR} !important;
+        border-radius: 4px !important;
+        transition: all 0.2s ease !important;
+    }}
+    .stButton > button:hover {{
+        border-color: {CYAN} !important;
+        color: {CYAN} !important;
+        background-color: {NAVY_LIGHT} !important;
+        box-shadow: 0 0 10px rgba(0,212,255,0.2) !important;
+    }}
+
     /* ── Scrollbar ──────────────────────────────────────────────────── */
     ::-webkit-scrollbar       {{ width: 4px; height: 4px; }}
     ::-webkit-scrollbar-track {{ background: {NAVY_DARK}; }}
@@ -409,7 +448,20 @@ def inject_css():
     .stSlider > div > div {{ background: {BORDER_CLR} !important; }}
     .stCheckbox > label {{ color: {TEXT_PRIMARY} !important; }}
 
-    /* ── Button spacing ─────────────────────────────────────────────── */
+    /* ── Buttons ────────────────────────────────────────────────────── */
+    .stButton > button {{
+        background-color: {NAVY_PANEL} !important;
+        color: {TEXT_PRIMARY} !important;
+        border: 1px solid {BORDER_CLR} !important;
+        border-radius: 4px !important;
+        transition: all 0.2s ease !important;
+    }}
+    .stButton > button:hover {{
+        border-color: {CYAN} !important;
+        color: {CYAN} !important;
+        box-shadow: 0 0 10px rgba(0,212,255,0.2) !important;
+    }}
+    
     button[kind="secondary"] {{
         margin-top: 4px !important;
     }}
@@ -420,40 +472,43 @@ def inject_css():
 # Data loaders — cached with short TTL for live-refresh feel
 # ---------------------------------------------------------------------------
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=2)
 def load_alerts() -> pd.DataFrame:
     """Load alert_log.json into a DataFrame."""
+    empty_df = pd.DataFrame(columns=[
+        "alert_id", "frame_id", "timestamp", "time_str", "date_str",
+        "priority", "anomaly_score", "anomaly_prob", "alert_level",
+        "reasons", "detection_count", "motion_score", "notified", "class_name"
+    ])
     if not ALERT_LOG.exists():
-        return _demo_alerts()
+        return empty_df
     try:
         with open(ALERT_LOG) as f:
             data = json.load(f)
         if not data:
-            return _demo_alerts()
+            return empty_df
         df = pd.DataFrame(data)
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
         df["time_str"]  = df["timestamp"].dt.strftime("%H:%M:%S")
         df["date_str"]  = df["timestamp"].dt.strftime("%Y-%m-%d")
         return df
     except Exception:
-        return _demo_alerts()
-    with open("alerts.json") as f:
-        data = json.load(f)
+        return empty_df
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=2)
 def load_sessions() -> list:
     """Load all session JSON files from data/results/."""
     sessions = []
-    for path in sorted(RESULTS_DIR.glob("session_*.json")):
+    for path in sorted(RESULTS_DIR.glob("session_*.json"), key=os.path.getmtime):
         try:
             with open(path) as f:
                 sessions.append(json.load(f))
         except Exception:
             pass
-    return sessions if sessions else [_demo_session()]
+    return sessions if sessions else [{}]
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=2)
 def load_anomaly_summary() -> dict:
     if ANOMALY_JSON.exists():
         try:
@@ -461,7 +516,7 @@ def load_anomaly_summary() -> dict:
                 return json.load(f)
         except Exception:
             pass
-    return _demo_anomaly_summary()
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -1056,10 +1111,10 @@ def render_sidebar(df: pd.DataFrame, session: dict):
         st.markdown("""<div class="section-sep" style="margin-top:1rem">◈ CONTROLS</div>""",
                     unsafe_allow_html=True)
 
-        auto_refresh = st.checkbox("Auto Refresh (Full Dashboard)", value=False)
+        auto_refresh = st.checkbox("Auto Refresh (Full Dashboard)", value=True)
         if auto_refresh:
-            st_autorefresh(interval=5000, key="dashboard_refresh")
-            st.caption("🔄 Refreshing full dashboard every 5 seconds")
+            st_autorefresh(interval=2000, key="dashboard_refresh")
+            st.caption("🔄 Refreshing dashboard every 2 seconds")
 
         n_alerts = st.slider("Alert feed rows", 5, 50, 15)
 
@@ -1110,8 +1165,13 @@ def render_sidebar(df: pd.DataFrame, session: dict):
         st.markdown(f"""
         <style>
         div[data-testid="stTextInput"] input {{
-        border: 2px solid {border_color} !important;
-        box-shadow: 0 0 6px {border_color}55 !important;
+            background-color: {NAVY_DARK} !important;
+            color: {TEXT_PRIMARY} !important;
+            border: 2px solid {border_color} !important;
+            box-shadow: 0 0 6px {border_color}55 !important;
+        }}
+        div[data-testid="stTextInput"] div[data-baseweb="input"] {{
+            background-color: {NAVY_DARK} !important;
         }}
         </style>
         """, unsafe_allow_html=True)
@@ -1252,37 +1312,24 @@ def render_kpis(df: pd.DataFrame, session: dict, anomaly: dict):
 # Main layout
 # ---------------------------------------------------------------------------
 
-@st.fragment(run_every=0.5)
+def get_local_ip():
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
 def render_live_video_feed():
-    frames_dir = BASE_DIR / "data" / "detections"
-    import os
-    if frames_dir.exists():
-        try:
-            # Only consider files that have content (size > 0) to avoid reading during a write
-            jpg_files = [f.path for f in os.scandir(frames_dir) if f.name.endswith('.jpg') and f.stat().st_size > 1000]
-            if jpg_files:
-                # Sort the most recent 3 files as fallbacks
-                latest_files = sorted(jpg_files, key=os.path.getmtime, reverse=True)[:3]
-                from PIL import Image
-                img_rendered = False
-                for latest_file in latest_files:
-                    try:
-                        img = Image.open(latest_file)
-                        img.load() # Force load to catch truncated image files
-                        st.image(img, use_container_width=True)
-                        img_rendered = True
-                        break
-                    except Exception:
-                        continue
-                
-                if not img_rendered:
-                    st.markdown(f'<div style="color:{TEXT_DIM};padding:2rem;text-align:center;font-size:0.8rem">Loading image frame...</div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div style="color:{TEXT_DIM};padding:2rem;text-align:center;font-size:0.8rem">Waiting for video frames... Ensure pipeline is running with --save-frames.</div>', unsafe_allow_html=True)
-        except Exception as e:
-            pass
-    else:
-         st.markdown(f'<div style="color:{TEXT_DIM};padding:2rem;text-align:center;font-size:0.8rem">Detections folder not found.</div>', unsafe_allow_html=True)
+    host_ip = os.getenv("HOST_IP", get_local_ip())
+    st.markdown(
+        f'<img src="http://{host_ip}:5000/video_feed" style="width: 100%; border-radius: 4px; object-fit: contain;">',
+        unsafe_allow_html=True
+    )
 
 def render_main(df: pd.DataFrame, session: dict, anomaly: dict,
                 n_alerts: int, priority_filter: list):
@@ -1302,7 +1349,10 @@ def render_main(df: pd.DataFrame, session: dict, anomaly: dict,
 
         filtered = df[df["priority"].isin(priority_filter)] \
                    if not df.empty else df
-        filtered = filtered.head(n_alerts)
+        
+        # Show newest alerts first
+        if not filtered.empty:
+            filtered = filtered.iloc[::-1].head(n_alerts)
 
         if filtered.empty:
             st.markdown(f"""
@@ -1492,7 +1542,8 @@ def render_main(df: pd.DataFrame, session: dict, anomaly: dict,
                                   "detection_count", "motion_score",
                                   "reasons", "notified"]
                      if c in df.columns]
-        display_df = df[df["priority"].isin(priority_filter)][show_cols].head(50)
+        # Show newest alerts first
+        display_df = df[df["priority"].isin(priority_filter)][show_cols].iloc[::-1].head(50)
 
         if "reasons" in display_df.columns:
             display_df = display_df.copy()

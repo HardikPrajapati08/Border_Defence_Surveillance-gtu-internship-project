@@ -322,6 +322,15 @@ class AnomalyDetector:
 
         X = np.vstack(self._baseline_data)
 
+        # BUG FIX: Handle zero-variance data (e.g. video starts with 30 identical empty frames)
+        if np.var(X, axis=0).max() < 1e-6:
+            logger.warning(
+                "Baseline frames have almost zero variance (identical frames). "
+                "Falling back to rule-based scoring."
+            )
+            self._is_fitted = False
+            return
+
         self._scaler  = StandardScaler()
         X_scaled      = self._scaler.fit_transform(X)
 

@@ -297,9 +297,33 @@ class BorderDetector:
         h    = (y2 - y1) / frame_h
         area = w * h
 
+        # Use YOLO's native names for accurate identification
+        class_name = self._model.names.get(class_id, CLASS_NAMES.get(class_id, f"class_{class_id}"))
+        
+        # Dynamically determine threat level based on the object name
+        name_lower = class_name.lower()
+        if name_lower in ["person", "man", "woman"]:
+            threat = "medium"
+        elif name_lower in ["car", "truck", "bus", "vehicle", "motorcycle", "bicycle"]:
+            threat = "low"
+        elif name_lower in ["crowd", "people"]:
+            threat = "high"
+        elif name_lower in ["military_vehicle", "tank"]:
+            threat = "critical"
+        elif name_lower in ["aircraft", "airplane", "drone", "aeroplane"]:
+            threat = "high"
+        elif name_lower in ["ship", "boat"]:
+            threat = "medium"
+        elif name_lower in ["suspicious_object", "weapon", "gun", "knife", "backpack", "suitcase", "tie"]:
+            threat = "critical"
+        elif name_lower in ["traffic light", "stop sign"]:
+            threat = "low"
+        else:
+            threat = "low"
+
         return Detection(
             class_id    = class_id,
-            class_name  = CLASS_NAMES.get(class_id, f"class_{class_id}"),
+            class_name  = class_name,
             confidence  = confidence,
             bbox        = [x1, y1, x2, y2],
             center_x    = cx,
@@ -307,7 +331,7 @@ class BorderDetector:
             width_norm  = w,
             height_norm = h,
             area_norm   = area,
-            threat_level = CLASS_THREAT.get(class_id, "low"),
+            threat_level = threat,
         )
 
     # ------------------------------------------------------------------

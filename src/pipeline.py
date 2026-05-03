@@ -58,6 +58,8 @@ from typing import Dict, List, Optional
 # inherits the same handler setup.
 # ---------------------------------------------------------------------------
 
+LATEST_FRAME_BYTES = None
+
 def _setup_logging(log_file: Optional[str] = None,
                    verbose: bool = False) -> None:
     """Configure root logger with console + optional file handler."""
@@ -68,7 +70,8 @@ def _setup_logging(log_file: Optional[str] = None,
 
     if log_file:
         os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
-        handlers.append(logging.FileHandler(log_file))
+        # Use mode='w' to start a fresh log on every run
+        handlers.append(logging.FileHandler(log_file, mode='w'))
 
     logging.basicConfig(level=level, format=fmt, handlers=handlers, force=True)
 
@@ -99,14 +102,14 @@ except ImportError:  # pragma: no cover
 # Default paths — all relative to project root
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_PATH       = "models/border_yolo.pt"
+DEFAULT_MODEL_PATH       = "yolov8n.pt"
 DEFAULT_ANOMALY_MODEL    = "models/anomaly_model.pkl"
 DEFAULT_ALERT_LOG        = "data/alerts/alert_log.json"
 DEFAULT_RESULTS_DIR      = "data/results"
 DEFAULT_ANNOTATED_DIR    = "data/detections"
 DEFAULT_PIPELINE_LOG     = "data/logs/pipeline.log"
 DEFAULT_FRAME_SKIP       = 3
-DEFAULT_CONFIDENCE       = 0.25
+DEFAULT_CONFIDENCE       = 0.15
 DEFAULT_IOU              = 0.45
 DEFAULT_CONTAMINATION    = 0.08
 
@@ -271,11 +274,20 @@ class BorderSurveillancePipeline:
     def __init__(self, config: PipelineConfig) -> None:
         self.config  = config
         self.session = PipelineSession(config=config)
+        # Flags
         self._shutdown_requested = False
+        
+        # Start MJPEG streaming server
+        self._start_mjpeg_server()
+
+
 
         # Register Ctrl+C handler for graceful shutdown
         signal.signal(signal.SIGINT,  self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+        # BUG FIX: Clear old logs so dashboard starts fresh for the current session
+        self._clear_previous_session_logs()
 
         logger.info("=" * 60)
         logger.info("Border Surveillance AI — Pipeline")
@@ -294,6 +306,68 @@ class BorderSurveillancePipeline:
             os.makedirs(config.annotated_dir, exist_ok=True)
         if config.save_results:
             os.makedirs(config.results_dir, exist_ok=True)
+
+    def _clear_previous_session_logs(self):
+        """Clear the alert log, anomaly summary, and old results to ensure a fresh dashboard."""
+        import json
+        import shutil
+        
+        # 1. Clear specific JSON log files
+        files_to_clear = [
+            self.config.alert_log,
+            "data/detections/anomaly_summary.json"
+        ]
+        for fpath in files_to_clear:
+            try:
+                p = Path(fpath)
+                if p.exists():
+                    # We write an empty list or dict depending on the file type
+                    content = [] if ".json" in fpath and "alert" in fpath else {}
+                    with open(p, "w") as f:
+                        json.dump(content, f)
+                    logger.info("Cleared previous session log: %s", fpath)
+            except Exception as e:
+                logger.warning("Could not clear log %s: %s", fpath, e)
+
+        # 2. Clear old session results
+        if os.path.exists(self.config.results_dir):
+            try:
+                for f in os.listdir(self.config.results_dir):
+                    if f.startswith("session_") and f.endswith(".json"):
+                        os.remove(os.path.join(self.config.results_dir, f))
+                logger.info("Cleared old session results in %s", self.config.results_dir)
+            except Exception as e:
+                logger.warning("Could not clear results dir: %s", e)
+
+    def _start_mjpeg_server(self):
+        import threading
+        from flask import Flask, Response
+
+        app = Flask(__name__)
+
+        def generate_mjpeg():
+            global LATEST_FRAME_BYTES
+            while True:
+                if LATEST_FRAME_BYTES is not None:
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + LATEST_FRAME_BYTES + b'\r\n')
+                time.sleep(0.1)
+
+        @app.route('/video_feed')
+        def video_feed():
+            return Response(generate_mjpeg(),
+                            mimetype='multipart/x-mixed-replace; boundary=frame')
+
+        def run_flask():
+            import logging
+            log = logging.getLogger('werkzeug')
+            log.setLevel(logging.ERROR)
+            app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
+        self.flask_thread = threading.Thread(target=run_flask, daemon=True)
+        self.flask_thread.start()
+        logger.info("Started MJPEG live stream server on http://localhost:5000/video_feed")
+
             
 
     # ------------------------------------------------------------------
@@ -373,20 +447,28 @@ class BorderSurveillancePipeline:
             level, score, priority_tag,
         )
 
-    def _save_annotated_frame(self, frame_item: dict,
-                              fr_result) -> None:
-        """Draw bounding boxes and save annotated frame to disk."""
+    def _update_stream_and_save(self, frame_item: dict,
+                                fr_result) -> None:
+        """Draw bounding boxes, update MJPEG stream, and optionally save to disk."""
         import cv2 as _cv2
         import numpy as np
         frame = frame_item["frame"]
         if frame.dtype != np.uint8:
             frame = (frame * 255).clip(0, 255).astype(np.uint8)
         annotated = self._detector.annotate_frame(frame, fr_result)
-        out_path  = os.path.join(
-            self.config.annotated_dir,
-            f"frame_{fr_result.frame_id:06d}.jpg",
-        )
-        _cv2.imwrite(out_path, annotated)
+        
+        if self.config.save_frames:
+            out_path  = os.path.join(
+                self.config.annotated_dir,
+                f"frame_{fr_result.frame_id:06d}.jpg",
+            )
+            _cv2.imwrite(out_path, annotated)
+        
+        # Always update MJPEG stream buffer
+        global LATEST_FRAME_BYTES
+        ret, buffer = _cv2.imencode('.jpg', annotated)
+        if ret:
+            LATEST_FRAME_BYTES = buffer.tobytes()
 
     def _save_session_results(self) -> None:
         """Write full session summary + all alert records to JSON."""
@@ -495,9 +577,8 @@ class BorderSurveillancePipeline:
 
         fr_dict = fr_result.to_dict()
 
-        # ── Save annotated frame (optional) ──────────────────────────
-        if self.config.save_frames:
-            self._save_annotated_frame(frame_item, fr_result)
+        # ── Annotate frame for MJPEG stream and (optional) disk save ─────
+        self._update_stream_and_save(frame_item, fr_result)
 
         # ── Stage 3a: Phase A — baseline collection ───────────────────
         if phase == "A":
